@@ -1,0 +1,120 @@
+---
+title: "Kallisto Quantification"
+author: "Caleb Embree"
+date: "11/27/2023"
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    theme: journal
+    highlight: pygment
+---
+
+# Introduction
+
+Kallisto is a method used to align RNA-seq reads to a transcriptome and quantify the isoforms. 
+Unlike methods like Stringtie, Kallisto uses a technique known as psuedo-alignment.
+This allows it to run much faster than other methods. 
+We normally use the output of Kallisto to examine how RNA abundance has changed between treatments using DEseq2 (See that document for more details).
+Kallisto is computationally intensive, so it runs on the OSC (Ohio Supercomputer Center).
+
+# Kallisto Index
+
+Like most alignment tools Kallisto needs an index.
+To generate this we must first download the transcriptome (in the form of the human genome cDNA) from ensembl. 
+Then we generate the kallisto index in same folder.
+This index only needs to be made once, and will be used in all subsequent runs kallisto. 
+This process takes a lot of memory, so it is run on a huge memory cluster.
+
+```{bash Kallisto Index, eval=FALSE}
+#PBS -l walltime=08:00:00
+#SBATCH --ntasks-per-node=16 --partition=hugemem
+#PBS -N Kallisto_index
+#PBS -m ae
+#PBS -A PAS1067
+
+set -x
+set echo on
+echo Current host is `hostname`
+echo Working directory is `pwd`
+date
+echo -------------------------------------------
+
+#Replace the XXXX below with the rest of the path to your scratch folder
+module load kallisto
+module load python
+mkdir /fs/scratch/PAS1067/XXXX/kallisto #Makes a new folder called kallisto
+cd /fs/scratch/PAS1067/XXXX/kallisto #Changes the working directory to the folder you just made
+
+#Download cDNA file
+wget https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz
+
+#Make the kallisto index with the name kindex.idx
+kallisto index -i kindex.idx /fs/scratch/PAS1067/XXXX/kallisto/Homo_sapiens.GRCh38.cdna.all.fa.gz
+
+echo -------------------------------------------
+echo Current host is `hostname`
+echo Working directory is `pwd`
+date
+```
+
+When not in use it's handy to keep the kallisto folder in the project folder (/fs/ess/).
+This way you don't have to worry about it getting deleted because of inactivity in the scratch folder and requiring you to remake it.
+
+# Kallisto quantification
+
+To quantify RNA-seq reads kallisto requires fastq files.
+If not using your own data these can be downloaded from the SRA.
+If the reads are paired they should be split, so there should be two files per run i.e. SRA1_1.fastq and SRA1_2.fastq.
+
+For this script you will also need to create a text file titled "runids.txt".
+This file should be in the same folder as the fastq files. 
+The runids file should just contain the name of the run, so everything before the _1.fastq in paired end sequencing.
+Each sample ID should be on a new line of the file.
+
+```{bash Kallisto quanitifcation, eval=FALSE}
+#PBS -l walltime=03:00:00
+#PBS -l nodes=1:ppn=12
+#PBS -N Kallistoindexing
+#PBS -m ae
+#PBS -A PAS1067
+
+set -x
+set echo on
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+echo -------------------------------------------
+
+module load kallisto
+#Change YYYY to your folder on scratch on OSC
+#Change XXX to the rest of the path to the folder the fastq files are in
+cd /fs/scratch/PAS1067/YYYY/XXX 
+mkdir koutput #Makes a new directory you're going to write the output of kallisto for
+
+
+for id in $(cat runids.txt) #This reads each line of the runids file and does everything between the do and done
+do
+
+kallisto quant -i /fs/scratch/PAS1067/YYYY/kallisto/kindex.idx -o koutput/"$id" "$id"_1.fastq "$id"_2.fastq #The $id will be replaced by the computer by the sample id
+echo completed kallisto for $id
+date
+
+done
+
+echo -------------------------------------------
+echo Current host is `hostname`
+echo Working directory is `pwd`
+date
+```
+
+This creates a new folder with the kallisto output for each sample.
+If you are doing DEseq2 to analyze fold changes you will have to download the koutput folder to your personal computer to run R. 
+I prefer using cyberduck to download the files, but you can also do it from the OSC ondemand website.
+Make sure the files are unziped, and each run has it's own subfolder within the koutput folder.
+
+# Changelog
+
+Created on 11/21/2023
+
+11/27/2023: Fixed some errors and added more clarification
