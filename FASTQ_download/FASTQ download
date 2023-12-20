@@ -1,0 +1,170 @@
+---
+title: "FASTQ download and quality control"
+author: "Caleb Embree"
+date: "11/27/2023"
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    theme: journal
+    highlight: pygment
+---
+
+# Introduction
+
+When working with RNA-seq data published by others you usually have to download it from an archive. 
+In the US this is the Short Read Archive (SRA) operated by the NIH while in Europe it's the European Nucleotide Archive (ENA), and in Japan it's the DNA Databank of Japan (DDBJ).
+The SRA and ENA are most commonly used.
+Because of requirements of funding agencies, RNA-seq data will be published to one of these two archives when they publish the paper where the data was used.
+In papers the data will often be linked, or a project code to the Gene Expression Omnibus (GEO) will be provided.
+
+# FASTQ download
+
+The first step is actually download the files.
+To do this we need to have the file code for each run, and know if the data is paired end or not. 
+Objects on both the SRA and ENA usually consist of a numerical code with a three letter prefix, together called an accession number.
+The first two letters denote where the sample was originally uploaded to (SR = SRA, ER = ENA), however the databases sync with one another so files can be accessed from the same place no matter where they were originally uploaded.
+
+The third letter refers to the kind of accession the code is for. 
+Most common is an X for experiment and an R for a run. 
+We want to download the data for individual runs, so we will use the SRR code. 
+Before downloading it's important to know if the RNA-seq is paired or single end sequencing. 
+Paired end reads require the FASTQ files to be "split" when downloading, which will result in two files for each SRR, with a suffix of _1.fastq and _2.fastq.
+
+
+The following code is for downloading paired end reads.
+It requires a text file named "runids.txt". 
+This file has each accession for all the runs to download on a separate line.
+The runids file should be in the same folder on the supercomputer you want to download the files to.
+I reccomend making a new fold for each project that you are downloading for. 
+
+```{bash FASTQ download, eval=FALSE}
+#!/bin/bash
+#SBATCH --job-name=FASTQ_download
+#SBATCH --time=8:00:0
+#SBATCH --ntasks=1
+#SBATCH --account=PAS1067
+
+set -x
+set echo on
+echo Current host is `hostname`
+echo Working directory is `pwd`
+date
+echo -------------------------------------------
+
+#Change the XXXX below to the path of your scratch folder on the supercomputer
+#Change the YYYY below to the name of the folder for this project
+mkdir /fs/scratch/PAS1067/XXXX/YYYY #Makes the folder for the project
+cd /fs/scratch/PAS1067/XXXX/YYYY #Changes the working directory to the project folder you just made
+module load sratoolkit/2.10.7 #Loads the module to download files from the SRA
+
+for id in $(cat runids.txt) #reads runids.txt does the following line by line, substituting the line for $id
+do
+
+fastq-dump --split-files $id #Download accession $id and split paired end files
+echo downloaded $id
+
+done
+
+echo -------------------------------------------
+echo Current host is `hostname`
+echo Working directory is `pwd`r
+date
+```
+
+# FastQC
+
+After downloading the FASTQ files, the first step should be run basic quality control using the program FastQC.
+This will provide a lot of information about these files, including the length of reads, which many programs use.
+FastQC will also provide information about quality of reads, number of reads, and GC content.
+All of this is useful diagnostic data about the files you just downloaded. 
+
+Once again you will use your runids.txt file to set up the loop.
+
+```{bash FastQC, eval = FALSE}
+#PBS -l walltime=08:00:00
+#PBS -l nodes=1:ppn=12
+#PBS -N fastQC
+#PBS -m ae
+#PBS -A PAS1067
+
+set -x
+set echo on
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+echo -------------------------------------------
+
+#Change the XXXX below to the path on the scratch folder of your project
+module load fastqc #loads the fastQC program
+cd /fs/scratch/PAS1067/XXXX #Changes the working directory to the project folder
+mkdir fastQC_output #Makes a new folder for the fastQC output within the project folder you moved to
+
+for id in $(cat runids.txt)
+do
+
+fastqc -o fastQC_output --extract -t 2 "$id"_1.fastq "$id"_2.fastq #Runs fastQC for each run
+echo completed fastQC for $id
+
+done
+
+echo -------------------------------------------
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+```
+
+This will make a new folder for each fastq file under the main fastQC_output folder.
+There are individual files for each type of analysis fastQC does, but it is also summarized in main html file that can be opened in any browser.
+These files can't be opened from the supercomputer file browser, they would have to be downloaded to your own computer first.
+
+# Combined Script
+
+If you would like to do FASTQ download and fastQC at the same time, the following script can be used. 
+
+```{bash Combined FASTQ, eval = FALSE}
+#!/bin/bash
+#SBATCH --job-name=FASTQ_download
+#SBATCH --time=8:00:0
+#SBATCH --ntasks=1
+#SBATCH --account=PAS1067
+
+set -x
+set echo on
+echo Current host is `hostname`
+echo Working directory is `pwd`
+date
+echo -------------------------------------------
+
+#Change the XXXX below to the path of your scratch folder on the supercomputer
+#Change the YYYY below to the name of the folder for this project
+mkdir /fs/scratch/PAS1067/XXXX/YYYY #Makes the folder for the project
+cd /fs/scratch/PAS1067/XXXX/YYYY #Changes the working directory to the project folder you just made
+module load sratoolkit/2.10.7 #Loads the module to download files from the SRA
+module load fastqc #loads the module for fastQC
+mkdir fastQC_output #Makes a new folder for the fastQC output within the project folder
+
+for id in $(cat runids.txt) #reads runids.txt does the following line by line, substituting the line for id
+do
+
+fastq-dump --split-files $id #Download accession $id and split paired end files
+echo downloaded $id
+fastqc -o fastQC_output --extract -t 2 "$id"_1.fastq "$id"_2.fastq #Runs fastQC for each run
+echo completed fastQC for $id
+
+done
+
+echo -------------------------------------------
+echo Current host is `hostname`
+echo Working directory is `pwd`r
+date
+```
+
+
+# Changelog
+
+Created on 11/21/2023
+
+## 11/27/2023
+
+Fixed some errors and added more clarification. 
