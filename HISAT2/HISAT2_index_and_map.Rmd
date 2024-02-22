@@ -1,0 +1,146 @@
+---
+title: "HISAT2 index and mapping"
+author: "Caleb Embree"
+date: "updated 2/22/2024"
+output:
+  html_document:
+    df_print: paged
+html_notebook:
+  toc: yes
+  toc_float: yes
+  theme: journal
+  highlight: pygment
+---
+# Introduction
+
+HISAT2 is one of many methods used to map RNA-sequencing reads to the human genome.
+Which type of mapping you use largely comes down to what kind of downstream analysis you need to do.
+The code here was primarily written to feed into Stringtie and ultimately IsoformSwitchAnalyzeR.
+However, this code is also sufficient to make the .bam and index files needed to view the mapping in a program such as the IGV. 
+For more information about HISAT2, look at their [github project](https://www.osu.edu/alumni/activities-and-events/events/2024/eclipse-glasses-registration.html).
+
+# Make the Index
+
+First you'll have to build a HISAT2 index.
+This is a step most alignment and mapping programs have in common.
+The index allows the computer to more efficiently search the human genome to map a RNA-seq read to it. 
+This can take a while, and requires a lot of memory to make (hence the hugemem request in the job setup).
+However, once the index is built you shouldn't have to make it again.
+Check the latest [ensembl build](https://useast.ensembl.org/Homo_sapiens/Info/Annotation) to see if there is a more recent build of the genome.
+No matter which build you use, you should use it for all subsequent analyses. 
+
+```{bash HISAT2 build, eval=FALSE}
+#PBS -l walltime=08:00:00
+#SBATCH --ntasks-per-node=16 --partition=hugemem
+#PBS -N HISAT_build
+#PBS -m ae
+#PBS -A PAS1067
+
+set -x
+set echo on
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+echo -------------------------------------------
+
+## Create the needed Folders for the genome information ##
+dir="/fs/scratch/PAS1067/XXXX/" #Change XXXX to your folder on the scratch system
+mkdir "$dir"/genome_files #Makes a folder for the files to download to
+cd "$dir"/genome_files #moves to that folder
+
+## Download the genome information ##
+wget https://ftp.ensembl.org/pub/release-110/gtf/homo_sapiens/Homo_sapiens.GRCh38.110.chr_patch_hapl_scaff.gtf.gz #Update this with the most current version if needed
+wget https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz #Update this with the most current version if needed
+gunzip Homo_sapiens.GRCh38.110.chr_patch_hapl_scaff.gtf.gz #Unzip the file
+gunzip Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz #unzip the file
+
+## Create the folders for making the index ##
+mkdir "$dir"/HISAT2_indexing #Makes a folder for the index
+cd "$dir"/HISAT2_indexing #moves to that folder
+module load hisat2 #loads the HISAT2 module on the supercomputer
+
+## Build the HISAT2 index ##
+hisat2_extract_splice_sites.py "$dir"/genome_files/Homo_sapiens.GRCh38.110.chr_patch_hapl_scaff.gtf > genome.ss #Extracts splice sites
+hisat2_extract_exons.py "$dir"/genome_files/Homo_sapiens.GRCh38.110.chr_patch_hapl_scaff.gtf > genome.exon #Extracts exons
+
+hisat2-build -p 16 --exon genome.exon --ss genome.ss "$dir"/genome_files/Homo_sapiens.GRCh38.dna.primary_assembly.fa genome_tran #Makes the HISAT2 index
+
+## Move the files to the project folder ##
+#Change YYYY below to your folder in the project directory
+mv "$dir"/genome_files/ /fs/ess/PAS1067/YYYY 
+mv "$dir"/HISAT2_indexing /fs/ess/PAS1067/YYYY
+
+echo -------------------------------------------
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+```
+
+Once you have the index built, it's best to move it to the project folder so that it doesn't get erased from the scratch folder (the last section of the above code does this). 
+When running HISAT2 to map reads you can just refer to the index in the project directory, so there's no need to move it again.
+
+# HISAT2 mapping
+
+Now that you have the index built you can map reads to the genome.
+The output of this mapping is a .sam file, but many other programs (including IGV) use .bam files.
+To convert them we use the program SAMtools.
+We'll also build an index of the .bam file so that you can use it on IGV.
+
+This code, like many others I've written for the supercomputer, requires a runids.txt file.
+This is a text file where each line has the name of one of your samples.
+Only include the name, not the _1 or _2 from a paired end sample or the file extension (.fastq for example).
+
+```{bash HISAT2 mapping, eval = F}
+#PBS -l walltime=10:00:00
+#PBS -l nodes=1:ppn=12
+#PBS -N HISAT2
+#PBS -m ae
+#PBS -A PAS1067
+
+
+set -x
+set echo on
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+echo -------------------------------------------
+
+## Create the needed folders and setup the environment ##
+#Change XXXX to your scratch folder
+#Change YYYY to your projects folder where the FASTQ files are
+dir="/fs/scratch/PAS1067/XXXX/YYYY"
+mkdir "$dir"/HISAT2 #Makes a HISAT folder
+mkdir "$dir"/sorted_BAM #Makes a folder for the files needed for IGV
+cd $dir #Moves to the project folder
+module load hisat2 #load the hisat module on the supercomputer
+module load samtools #load the samtools module on the supercomputer
+
+## Run HISAT2 to map the files ##
+#Change ZZZZ below to your folder in the project directory
+for id in $(cat runids.txt) #This will run the below code for each line in the runids.txt file
+do
+
+#Runs HISAT2 to map reads to the genome and outputs a SAM file
+hisat2 --dta -x /fs/ess/PAS1067/ZZZZ/HISAT2_indexing/genome_tran -1 "$dir"/"$id"_1.fastq -2 "$dir"/"$id"_2.fastq -S "$dir"/HISAT2/"$id"_hisat.sam
+
+samtools sort -o "$dir"/sorted_BAM/"$id"_sorted.bam "$dir"/HISAT2/"$id"_hisat.sam #Uses samtools to sort the reads and convert to a BAM file
+samtools index -b "$dir"/sorted_BAM/"$id"_sorted.bam #Uses samtools to make a bam index required for IGV
+echo $id is mapped and sorted
+
+done
+
+echo -------------------------------------------
+date
+echo Current host is `hostname`
+echo Working directory is `pwd`
+```
+
+If you are planning on using the mapped files for IGV you would want to download the entire sorted_BAM file. 
+
+# Changelog
+
+Created on 12/2/2023 -CE
+
+## 2/22/2024
+
+Expanded all of the explinations and simplified some code -CE
