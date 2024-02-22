@@ -1,0 +1,543 @@
+---
+title: "NMD analysis using DESeq2"
+author: "Caleb Embree"
+date: "11/27/2023"
+output:
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    theme: journal
+    highlight: pygment
+  html_document:
+    toc: yes
+    df_print: paged
+---
+
+# Introduction
+
+This script is to compare the RNA-sequencing of two conditions that have previously been quantified using kallisto. 
+Other quantification methods can likely be used, but the loading of the data and some specific settings may need to be changed.
+Throughout the script I will use Wildtype (WT) and knockdown (KD) as the two example conditions, but any two conditions can be considered. 
+The main output of DEseq2 is a table with mRNA isoforms and their log2 fold change (log2FC) between conditions.
+The log2FC can then be used for a number of different analyses, commonly examining a subset of transcripts via a cumulative distribution function (CDF) plot.
+
+# Setup
+
+## Install Packages
+The first thing to do is to install all of the packages you need. 
+This code chunk is set not to run in the output of this file, and you should do the same for any scripts based off of this. 
+Running this code chunk to install all the packages only needs to be run once to make sure you have everything needed. 
+
+I am splitting the packages into required and optional categories.
+Optional packages are not needed for every analysis, but can be used to for optional analyses or to change the looks of plots.
+Most of the packages are installed from CRAN (the R repository) using the install.packages command.
+The rest are found on bioconductor or github and the appropriate command is used to download from those sources.
+If you are asked if you want to install dependencies, please do so.
+
+```{r Install packages, eval=FALSE}
+#Install required packages
+install.packages("devtools")
+library(devtools)
+install.packages("readxl")
+install.packages("BiocManager")
+library(BiocManager)
+BiocManager::install("tximport")
+BiocManager::install("rhdf5")
+BiocManager::install("biomaRt")
+BiocManager::install("DESeq2")
+BiocManager::install("pheatmap")
+install.packages("tidyverse")
+install.packages("RColorBrewer")
+install.packages("textshape")
+install.packages("janitor")
+
+#Install optional packages
+install.packages("eulerr") #Used to make venn/euler diagrams
+install_github("BlakeRMills/MetBrewer") #Nice color pallets for plotting https://github.com/BlakeRMills/MetBrewer
+install_github("BlakeRMills/MoMAColors") #Nice color pallets for plotting https://github.com/BlakeRMills/MoMAColors
+install.packages("gghighlight") #Highlight specific points on a plot
+```
+
+## Load Packages
+
+After all of the packages have been installed, the next step is to load all of the packages in.
+It's easiest to do it once at the beginning to make sure you have everything ready to go instead of one by one as you need it.
+That way if you add to or modify the script you don't have to worry about moving where you load packages.
+I am loading all of the packages, but if you chose not to install the optional packages delete those lines. 
+
+*A note about dplyr*: dplyr is a package used to manipulate data tables, and is used very often throughout this script. 
+It has a couple of commands that are the same as other (often base R) packages, most notably select().
+If you get an error on a line with select() it likely means R tried to use select from another package instead of from dplyr.
+Loading dplyr last can help fix some of these problems, but it still may crop up.
+To prevent this use dplyr::select(), which tells R to use select specifically from dplyr.
+I have tried to do this throughout the script, but you may need to do it if you add anything.
+
+```{r load packages}
+library(readxl)
+library(tximport)
+library(biomaRt)
+library(DESeq2)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+library(MetBrewer)
+library(MoMAColors)
+library(pheatmap)
+library(textshape)
+library(janitor)
+library(eulerr)
+library(gghighlight)
+library(tidyverse)
+library(dplyr) #dplyr should be loaded last so other packages don't mask it's functions
+```
+
+## Set Working Directory
+
+I **highly** recommend that you have a separate R project for each set of data you are trying to analyze. 
+Having a project helps to keep data contained, and as long as you save the workspace it means you don't have to run the entire script every time you work on it.
+If you do have an R project, you don't need to change the working directory because it will automatically be set to the same folder of the directory.
+If you don't have a project or need to set the working directory to a different folder use the code below. 
+Make sure you do this every time you run the code, otherwise you'll not be able to load things and will save them in strange places. 
+
+Everything you try to access, like kallisto outputs, need to be in the same folder as the working directory.
+If you don't know the filepath to the directory you want, use R studio session->set working directory->choose directory (or ctrl+shift+H) to use the file explorer to set the working directory.
+Then copy the code outputted in ther console and copy it to the chunk below. 
+
+```{r working directory, eval=FALSE}
+getwd() # Displays the current working directory
+setwd("path/to/wd") #changes the current working directory
+getwd() #Make sure you're in the right place
+```
+
+# Import Data
+
+The first step of the analysis is to import the data you get from kallisto.
+When running kallisto you end up with a koutput folder with a subfolder for each sample.
+Download and, if needed, unzip the kouput folder in your working directory. 
+
+You also need to create an excel file called sample_list.xlsx that has two columns.
+One is titled "Run" and has the accession numbers of each run. 
+The other is titled "treatment" and has what sample category you want it listed under.
+For example when comparing control vs siRNA datasets the treatments would be WT and KD.
+The treatments should be grouped together i.e. all WT samples then all KD samples.
+
+Throughout the code I use a number of generic variables that you'll have to to replace with the specifics of your data.
+You should be able to use a find and replace instead of having to do it manually. 
+I am using two samples per treatment, but if you are using more you can add them wherever the sample variables are included.
+Many of these commands are based on the order of the treatment in your samples file.
+So make sure T1 is the first treatment listed.
+
+## Variables to change
+
+ProjDir -> The file path to the working directory
+
+T1.1 -> The sample ID of the first sample in treatment 1
+
+T1.2 -> The sample ID of the second sample in treatment 1
+
+T2.1 -> The sample ID of the first sample in treatment 2
+
+T2.1 -> The sample ID of the second sample in treatment 2
+
+QOI -> The question or treatment under investigation i.e. UPF1 KD vs WT
+
+T1 -> The treatment condition 1.
+
+T2 -> Treatment conditon 2.
+
+You can import datasets with multiple treatments i.e. KD vs KO vs WT, but this script is designed for comparing two conditions. 
+You would have to modify it to do the step where fold changes are calculated multiple times, one for each comparison. 
+i.e. once for KD vs WT and once for KO vs WT.
+To have to modify less of the script, if you are only comparing two conditions T1 should be what you want as the numerator of the log2FC and T2 should be the denominator.
+
+```{r Import data}
+#### Load File containing sample types ####
+samples <- read_excel("sample_list.xlsx")
+View(samples)
+
+
+#### Load in the files ####
+files <- file.path("ProjDir","koutput", samples$Run, "abundance.h5") #This will create a vector with the path to the abundance.h5 file for each sample 
+names(files) <- paste0(c("T1.1","T1.2","T2.1","T2.2")) #Names each file path with the sample name
+files #Check the output of this to make sure each sample is associated with the right file path
+
+#### importing output files from each library to a compiled dataframe ####
+txi.kallisto.tsv <- tximport(files, type = "kallisto", txOut=TRUE, countsFromAbundance = "lengthScaledTPM") #Imports the data and calculates counts 
+head(txi.kallisto.tsv$counts) #Displays the head of the counts table
+counts<-as.data.frame(txi.kallisto.tsv$counts) #Pulls just the counts and turns it into a data frame
+
+#### Finding isoform specific counts associated with a sanple in the dataset.####
+listMarts() #Gets the marts from Biomart
+ensembl <- useMart("ensembl") #Use the ensembl mart
+ensembl <- useDataset("hsapiens_gene_ensembl",mart=ensembl) #Use the homo sapiens dataset
+attributes <- listAttributes(ensembl) #List the attributes available
+listgenes <- getBM(attributes = c("external_gene_name","ensembl_transcript_id_version","external_transcript_name"),
+                      filters = "ensembl_transcript_id_version",
+                      values = rownames(counts),
+                      mart = ensembl) #Using the transcript ids from the counts data table get the gene name and transcript name
+
+counts$ensembl_transcript_id_version<-rownames(counts) #Make the rownames into a column
+listgenes <- inner_join(counts, listgenes, by = "ensembl_transcript_id_version") #Create a new table with the counts and the attributes from above. 
+```
+
+# Differential Expression Analysis
+
+After the data is imported, we have to do the actual differential expression analysis.
+The first step is to combine the imported data with the treatment, then we conduct DEseq to analyze the samples. 
+Before we look at the fold changes of individual transcripts we do some quality control to make sure that the samples are similar within treatment groups. 
+This script calls the grouping factor genotype, but this can be changed to be more reflective of your experiment if desired.
+
+```{r DEseq2}
+#### Create the Sample table and conduct DEseq
+colData <- data.frame(genotype = factor(c("T1","T1","T2","T2"))) #make sure these are in the right order that match your sample file
+ddscounts.table <- DESeqDataSetFromTximport(txi.kallisto.tsv, colData, formula(~ genotype))
+ddscounts.table = ddscounts.table[rownames(ddscounts.table) %in% rownames(counts)]
+
+ddscounts <- DESeq(ddscounts.table) #Runs DEseq2 on the samples
+
+colData(ddscounts) #Make sure data is associated with correct genotype
+
+
+#### Quality Control plots####
+#PCAplots
+vsd <- vst(ddscounts, blind = FALSE)
+rld <- rlog(ddscounts)
+plotPCA(vsd, intgroup = "genotype")
+#with sample labels
+plotPCA(vsd, intgroup = "genotype")+
+  geom_text_repel(aes(label=name))
+
+#heatmap
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+rownames(sampleDistMatrix) <- paste(vsd$genotype, sep = "-")
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+```
+
+Together the PCA plot and heatmap will show you how similar all the samples are. 
+The PCA plot above should show the different genotypes segregating together. 
+If you have one sample from a group mixing with another group, make sure that the sample is annotated correctly. 
+If there is not a clear difference between the sample groups it will be hard to interpret the effect of the treatment. 
+
+## Calculate log2FC
+
+The next step is to generate the tables with log2FC.
+In other words, do the pairwise comparison between two treatment conditions.
+This step can be repeated multiple times for each comparison you need to make.
+Just make sure that you list the treatment conditions correctly to make sure that you are calculating the Log2FC that you desire.
+In this code chunk and many others I have left comments to fill out the results of some of your data.
+I find it useful to have this recorded next to the code where that information comes from so that you don't have to rerun or look up the tables every time you want some basic information.
+
+```{r Pairwise comparisons}
+#### Calculate Log2FC ####
+as.data.frame(colData(ddscounts)) #Displays all your samples with their associated genotype and size factor
+#The next step generates the table with log2FC, padj, and standard errors
+res_counts <- results(ddscounts, contrast = c("genotype","T1","T2")) #The first condition listed will be the numerator of the log2FC calculation and the second will be the denominator. 
+res_counts
+mcols(res_counts, use.names = TRUE)
+
+#### Examine log2FC graphically ####
+#Histogram of p values
+hist(res_counts$pvalue, col = "darkslategray1") #plots p-value histogram
+hist(res_counts$padj, col = "red1") #plots histogram of adjusted p-value
+
+#significant results
+res.sig <- res_counts[ which(res_counts$padj < 0.05), ] #Filters to isoforms with adjusted p-value <0.05
+hist(res.sig$pvalue, col = "green1") #plots histogram of significant transcripts
+head(res.sig)
+plotMA(res_counts, padj = TRUE, ylim=c(-6,6), main ="MA plot: T1 vs T2") #Plots all isoforms (can take a while to load)
+
+plotMA(res.sig) #plots only the significant isoforms
+sum( res.sig$log2FoldChange < 0, na.rm=TRUE )#upregulated genes=
+sum( res.sig$log2FoldChange > 0, na.rm=TRUE )#downregulated genes=
+head(res.sig$log2FoldChange > 0)
+
+head( res.sig[ order( res.sig$log2FoldChange ), ] )
+head( res.sig[ order( res.sig$log2FoldChange ), ],20 )
+tail( res.sig[ order( res.sig$log2FoldChange ), ],20 )
+summary(res.sig$log2FoldChange)
+#log2fc range : - to +
+```
+
+## Save Log2FC
+
+The final step before examining how the treatment effected specific classes of transcripts is to save the raw data.
+We will save this as a number of .csv files, because these are easy to import into R. 
+CSV files can also be opened in excel, just make sure you specify that it is a comma delimited file. 
+Should you need to save a file as an excel file install the openxlsx2 package and use the following code: 
+`write_xlsx(dataframe, "filename.xlsx")`
+
+```{r Save data}
+write.csv(as.data.frame(res_counts), file = "T1_vs_T2_full_results.csv") #saves all log2FC
+write.csv(as.data.frame(res.sig), file = "T1_vs_T2_sig_results.csv") #Saves only transcripts with significant log2FC
+write.csv(counts(ddscounts, normalized = T), file = "T1_vs_T2_normalized_counts.csv") #Saves normalized counts of transcripts
+```
+
+# Analyze Log2 Fold Change
+
+Now that we have the log2FC of transcripts we can start to examine how specific classes of transcripts are effected by the treatment.
+Most of the analysis I'm including are different ways of looking at NMD targeted transcripts. 
+The same principle and much of the same code can be used to look at different class of transcripts, as long as you have a list of transcript IDs.
+Many of the following analyses serve the same purpose, so you don't need to run or include all of them.
+Before running figure out what effects you're trying to look at and only use that list of transcripts. 
+
+*Note about NMD target lists*:
+When an analysis uses a specific list of NMD-targeted transcripts I have included a brief explination of where that list comes from. 
+For more detailed information and to see the code that generated that list, please see that workflow. 
+
+## NMD overlap
+
+This first analysis looks at how many of the NMD annotated transcripts of the human genome are in your dataset. 
+To do this we have to download the isoform IDs of all of the NMD annotated targets from ensembl.
+Then we will generate a Euler diagram showing the number of transcripts in each category.
+This diagram uses the default eulerr package colors, for information on how to make better looking plots see the graphing in R workflow.
+
+```{r NMD overlap}
+up.trans <- as.data.frame(subset(res.sig, res.sig$log2FoldChange> 0)) #Create a table with the upregulated targets in your significant dataset
+
+#### Download genome data about ensembl significant data ####
+transcriptids=row.names(res.sig) #Take the row names of the significant table and makes it a new table
+transcriptids1=as.vector(transcriptids) #Makes that table a vector
+trans.detail <- getBM(attributes = c("ensembl_transcript_id_version","ensembl_gene_id_version",
+                                     "external_gene_name","transcript_biotype"),
+                filters = "ensembl_transcript_id_version",
+                values = transcriptids1,
+                mart = ensembl) #Gets the genome information (name, gene id etc.) of the transcripts in the sig dataset
+sig.trans <- as.data.frame(res.sig) #Convert the sig dataset into a data table
+#total significantly changing genes = 
+
+NMD.trans <- getBM(attributes = c("ensembl_transcript_id_version","ensembl_gene_id_version",
+                                 "external_gene_name","transcript_biotype"),
+                  filters = "transcript_biotype",
+                  values = "nonsense_mediated_decay",
+                  mart = ensembl)# Gets all transcripts with an NMD biotype
+#total NMD trans = 
+
+sigNMD=intersect(row.names(sig.trans), NMD.trans$ensembl_transcript_id_version)
+#intersect between NMDgenes and significantly changing genes in RNAseq(wt vs kd) = 
+
+#### ploting venn diagrams ####
+re.alltrans<-as.data.frame(res_counts) 
+set1=intersect(NMD.trans$ensembl_transcript_id_version, rownames(re.alltrans)) #Creates a set of the NMD biotype transcripts
+set2=row.names(sig.trans) #creates a set of the significant transcripts
+set3=row.names(up.trans) #creates a set of the upregulated transcripts
+
+set.seed(1)
+s <- list("NMD biotype" = set1,
+          "Significant transcripts" = set2,
+          "Upregulated transcripts" = set3)
+plot(euler(s), quantities = TRUE,
+     main="T1 vs T2 transcripts") #Creates the euler plot of the overlap of the three sets
+```
+
+## Creating the all transcript dataset
+
+This step is used for creating the alltrans dataset that all of the following CDF plots will use.
+Therefore, this step is required no matter which of the subsequent analyses you choose to run. 
+This takes the log2FC change table generated earlier and makes it into a table that is useable for ggplot and combining with other datasets. 
+
+```{r generate alltrans data}
+alltrans <- as.data.frame(res_counts) #coverts the log2FC change data into a data table
+alltrans = alltrans %>% filter(!is.na(padj)) #removes any transcripts without a padj value
+
+alltransbiotype <- getBM(attributes = c("ensembl_transcript_id_version","external_gene_name",
+                                        "transcript_biotype"),
+                      filters = "ensembl_transcript_id_version",
+                      values = rownames(res_counts),
+                      mart = ensembl) #Gets the genome data of all transcripts in the data table
+
+alltrans<-alltrans[order(rownames(alltrans)),] #Orders the table according to transcript id
+alltransbiotype<-alltransbiotype[order(alltransbiotype$ensembl_transcript_id_version),] #orders the genome information acording to transcript ID
+alltrans = rownames_to_column(alltrans, var = "transcript_id") #moves the rown names (transcript ids) to a column
+alltransbioNMD <- inner_join(alltrans,alltransbiotype, by=c("transcript_id" = "ensembl_transcript_id_version")) #Adds the genome information to all the transcripts
+```
+
+If you need to know the log2FC of a specific gene, such as the gene you KD, the last table made (alltransbioNMD) is a good one to check because you can search by gene name.
+
+Most subsequent analyses use `wilxcox.test` tests to calculate the p-value of the CDF plot.
+This performs a two-sample Wilcoxon test, also known as a Mann-Whitney test.
+These tests only work with two factors, so you might have to use a different test.
+When conducting the test you specify the alternative hypothesis, i.e. if you think the transcripts will be up or down regulated.
+Which direction you specify is determined by boy the hypothesis and the order your factors are in. 
+You are specifying that you think the first factor listed has less or greater values than the second factor. 
+For example, if our first factor is NMD targets and the second factor is non-NMD targets, in a UPF1 KD we would predict the NMD targets will be upregulated, so we will specify the alternative hypothesis is greater.
+This is fairly easy to check when you look at the CDF plot.
+If there is an obvious shift but you have a p-value close to one you likely need to swap "greater" and "less".
+If you're really unsure you can use "two.sided" to not specify a direction.
+
+## NMD biotype CDF
+
+The first CDF plot will analyze the Log2FC of transcripts with an annotated NMD biotype compared to a protein coding biotype.
+We already got the transcript biotypes in the last chunk of code, so we just have to filter the data. 
+The code for ggplot uses one of the optional packages for the color scale. 
+If you're not using that package you can replace it with a pallet from RcolorBrewer or make your own pallete. 
+
+```{r biotype CDF}
+alltransbioNMD = alltransbioNMD %>% filter(transcript_biotype == "protein_coding" | transcript_biotype == "nonsense_mediated_decay") #Filter to just the protein coding or NMD biotype
+count(alltransbioNMD, transcript_biotype) #X protein coding X NMD
+NMDbio_res <- wilcox.test(log2FoldChange ~ transcript_biotype, data = alltransbioNMD,
+                        exact = FALSE, alternative = "greater") #Perform a wilcoxon test to see if the NMD targets are more abundant in T1 (i.e have higher Log2FC)
+NMDbio_res #p-value = 
+
+NMDbio_cdf = ggplot(alltransbioNMD, aes(log2FoldChange, colour=transcript_biotype))+
+  stat_ecdf(linewidth=2)+ #Make a CDF with the linewidth 2
+  theme_minimal()+ #Set base theme
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(color = "grey"))+ #Remove gridlines and make the axis grey
+  coord_cartesian(xlim = c(-3,3)) + #limit the x-axis to -3 to 3
+  scale_color_manual(values = met.brewer("Hokusai2",n=2)) +
+  labs(y = "Cumulative Frequency")
+NMDbio_cdf = NMDbio_cdf + annotate("text", x=-2.5,y=1, label = "QOI T1 vs T2", size = 5, hjust = 0) +
+  annotate("text", x=-2.5,y=.95, label = "NMD biotype transcripts", hjust =0) +
+  annotate("text", x=-2.5,y=.9, label = "p-value = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.85, label = "NMD = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.8, label = "Protein Coding = ", hjust = 0) +
+  geom_vline(xintercept = 0, color = "grey") + 
+  geom_hline(yintercept = 0.5, color = "grey") +
+  theme(legend.position = c(0.85,0.1))
+NMDbio_cdf
+ggsave("QOI_NMDbiotype_CDF.pdf", 
+       plot = NMDbio_cdf,
+       scale = 1,
+       width = 8,
+       height = 6,
+       units = "in",
+       device = "pdf",
+       dpi = 300)
+```
+
+## Analysis with Robert's PTC+/- list
+
+This analysis uses Robert Patton's PTC+/- list.
+This list has predicted NMD targets based on the presence of an PTC and corresponding non PTC targets.
+This analysis requires the list named ENST_PTC-EPI-TFG.txt to be in the working directory, or provide the full path to that file. 
+
+```{r Roberts PTC list}
+ENST_PTC.EPI.TFG <- read.delim("ProjDir/ENST_PTC-EPI-TFG.txt") #load the list
+alltrans$ENST.ID <- sub("\\..*", "", alltrans$transcript_id) #Remove version numbers from transcript lists
+alltrans.rPTC<-inner_join(alltrans, ENST_PTC.EPI.TFG, by = "ENST.ID") #Create a new table of all the transcripts from Robert's list in your dataset
+count(alltrans.rPTC, PTC.Status) #X PTC false X PTC true
+rPTC_res <- wilcox.test(log2FoldChange ~ PTC.Status, data = alltrans.rPTC,
+                        exact = FALSE, alternative = "less") #Perform a wilcoxon test to see if the NMD targets are more abundant in T1 (i.e have higher Log2FC)
+rPTC_res #p-value = 
+
+rPTC_cdf = ggplot(alltrans.rPTC, aes(log2FoldChange, colour=PTC.Status))+
+  stat_ecdf(linewidth=2)+ #Make a CDF with the linewidth 2
+  theme_minimal()+ #Set base theme
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(color = "grey"))+ #Remove gridlines and make the axis grey
+  coord_cartesian(xlim = c(-3,3)) + #limit the x-axis to -3 to 3
+  scale_color_manual(values = moma.colors("Ernst",n=2)) +
+  labs(y = "Cumulative Frequency")
+rPTC_cdf = rPTC_cdf + annotate("text", x=-2.5,y=1, label = "QOI T1 vs T2", size = 5, hjust = 0) +
+  annotate("text", x=-2.5,y=.95, label = "Robert's PTC containg transcripts", hjust =0) +
+  annotate("text", x=-2.5,y=.9, label = "p-value = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.85, label = "NMD = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.8, label = "Protein Coding = ", hjust = 0) +
+  geom_vline(xintercept = 0, color = "grey") + 
+  geom_hline(yintercept = 0.5, color = "grey") +
+  theme(legend.position = c(0.85,0.1))
+rPTC_cdf
+ggsave("QOI_rPTC_CDF.pdf", 
+       plot = rPTC_cdf,
+       scale = 1,
+       width = 8,
+       height = 6,
+       units = "in",
+       device = "pdf",
+       dpi = 300)
+
+```
+
+
+## Lykke-Anderson Stringent NMD list
+
+This analysis uses a list of NMD targets from (Lyyke-Anderson et al. 2014 Genes and Development), using their stringent criteria.
+As the negative control it uses all of the protein coding isoforms from the same genes. 
+
+```{r Stringent NMD}
+StringentNMD = read.csv("ProjDir/Stringent_NMD_list_CE")
+alltrans.sNMD = inner_join(alltrans, StringentNMD, by = c("ENST.ID" = "transID"))
+count(alltrans.sNMD, NMD) #X NMD false X PTC true
+sNMD_res <- wilcox.test(log2FoldChange ~ NMD, data = alltrans.sNMD,
+                        exact = FALSE, alternative = "less") #Perform a wilcoxon test to see if the NMD targets are more abundant in T1 (i.e have higher Log2FC)
+sNMD_res #p-value = 
+
+sNMD_cdf = ggplot(alltrans.sNMD, aes(log2FoldChange, colour=NMD))+
+  stat_ecdf(linewidth=2)+ #Make a CDF with the linewidth 2
+  theme_minimal()+ #Set base theme
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(color = "grey"))+ #Remove gridlines and make the axis grey
+  coord_cartesian(xlim = c(-3,3)) + #limit the x-axis to -3 to 3
+  scale_color_manual(values = moma.colors("Picasso",n=2)) +
+  labs(y = "Cumulative Frequency")
+sNMD_cdf = sNMD_cdf + annotate("text", x=-2.5,y=1, label = "QOI T1 vs T2", size = 5, hjust = 0) +
+  annotate("text", x=-2.5,y=.95, label = "Stringent NMD transcripts", hjust =0) +
+  annotate("text", x=-2.5,y=.9, label = "p-value = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.85, label = "NMD+ = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.8, label = "NMD- = ", hjust = 0) +
+  geom_vline(xintercept = 0, color = "grey") + 
+  geom_hline(yintercept = 0.5, color = "grey") +
+  theme(legend.position = c(0.85,0.1))
+sNMD_cdf
+ggsave("QOI_sNMD_CDF.pdf", 
+       plot = sNMD_cdf,
+       scale = 1,
+       width = 8,
+       height = 6,
+       units = "in",
+       device = "pdf",
+       dpi = 300)
+```
+
+## Stringent PTC CDF
+
+This analysis uses my stringent PTC list, made from the shared NMD targets from Robert's and the Lyyke-Anderson lists.
+It therefore is made of validated NMD targets resulting from an PTC.
+The control is the MANE transcript of the same genes, so there's one transcript per gene in each category.
+
+```{r stringent PTC}
+sPTC_MANE = read.csv("C:/Users/Caleb/OneDrive - The Ohio State University/BioinfoData/ENCODE_GOI_K562/Stringent_PTC_MANE_CE.csv")
+alltrans.SPTC = inner_join(alltrans, sPTC_MANE, by = c("ENST.ID" = "transID")) 
+sPTC_res <- wilcox.test(log2FoldChange ~ PTC, data = alltrans.SPTC,
+                             exact = FALSE, alternative = "less")
+count(alltrans.SPTC, PTC) # PTC false  PTC true
+head(alltrans.SPTC)
+sPTC_MANE_res #p-vlaue = 
+
+
+sPTC_cdf = ggplot(alltrans.SPTC, aes(log2FoldChange, colour=PTC))+
+  stat_ecdf(linewidth=2)+
+  theme_minimal()+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(color = "grey"))+
+  coord_cartesian(xlim = c(-3,3)) +
+  scale_color_manual(values = met.brewer("Java",n=2)) +
+  labs(y = "Cumulative Frequency")
+sPTC_cdf = sPTC_cdf + annotate("text", x=-2.5,y=1, label = "QOI T1 vs T2", size = 5, hjust = 0) +
+  annotate("text", x=-2.5,y=.95, label = "PTC containing and MANE transcripts", hjust =0) +
+  annotate("text", x=-2.5,y=.9, label = "p-value = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.85, label = "PTC+ = ", hjust = 0) +
+  annotate("text", x = -2.5, y = 0.8, label = "PTC- = ", hjust = 0) +
+  geom_vline(xintercept = 0, color = "grey") + 
+  geom_hline(yintercept = 0.5, color = "grey") +
+  theme(legend.position = c(0.85,0.1))
+sPTC_cdf
+ggsave("QOI_sPTC_CDF.pdf", 
+       plot = sPTC_cdf,
+       scale = 1,
+       width = 8,
+       height = 6,
+       units = "in",
+       device = "pdf",
+       dpi = 300)
+```
+
+# Changelog
+
+Created on 11/27/2023 -CE
+
+## 11/30/2023
+
+Fixed some errors in the code that was causing graphs to be displayed improperly. -CE
