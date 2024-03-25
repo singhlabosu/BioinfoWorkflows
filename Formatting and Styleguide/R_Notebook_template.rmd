@@ -91,4 +91,8 @@ Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, 
 
 # Changelog
 
+Every document should include a changelog at the bottom.
+For each time the document is changed, put a short description of what was changed, the date, and who changed it. 
+This can be seen on github (using the blame feature), but the changelog is good for people not as familiar with github to see when it was last modified. 
+
 3/25/2024- Created (CE)
