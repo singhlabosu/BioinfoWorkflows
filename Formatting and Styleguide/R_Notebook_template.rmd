@@ -1,0 +1,98 @@
+---
+title: "R Notebook Template"
+author: "Name of everyone that contributed to it"
+date: 'Updated: '
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+    toc_float: yes
+    theme: journal
+    highlight: pygment
+---
+
+# Introduction
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. 
+This is the format you should use to submit to the github.
+Both the file you are currently edition (.rmd) and the HTML output (.HTML) should be uploaded.
+
+
+## Introduction to Markdown
+
+Markdown is a very common text editing format for the web.
+You can find out more about markdown formatting and how to use it in R from the [R Markdown book](https://bookdown.org/yihui/rmarkdown/).
+Here are some quick tips: 
+
+- Headings are denoted by a pound sign (#) at the start of the line.
+Multiple pound signs indicate sub headings. 
+These headings will show up in the table of contents of the HTML file.
+- A blank line is required to start a new paragraph.
+Just hitting enter once will cause whatever you're writing to come after the previous line.
+However it's good to put each sentence on it's own line for ease of readability in R studio (or another code editor).
+It will just look like one paragraph on the HTML output.
+- You can make text *italic* or **bold** by putting one or two asterisks respectively on either side of the text.
+_ Links are made by putting the text you want to display within [] and the link in () right after.
+For example [text to show on screen]_(link the text goes to) would create a link if you remove the underscore.
+
+## Document setup
+
+At the top of the document you can see a number of fields between three dashed lines.
+These are the fields that tell the document how to be formatted when you convert it from R.
+The title and output fields are required for every document, but you should always have the author and date fields as well.
+For the date put the date the document was last updated (and add any updates to the changelog below).
+
+By looking at the rmd file you can see that there are output types specified: an html_notebook and a html_document.
+These are very similar, but they differ in how they are made and what data they display.
+When you save a html notebook, an HTML file containing the code and output will be saved alongside it as a .nb.html file (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+Importantly, making a notebook does not run any code, it only shows the output of the code as is currently displayed in the R studio editor.
+
+On the other hand, making a html documents runs every chunk of code.
+This of course can take much longer, but it also means all of the output is displayed.
+To make an html document you go to where it says preview (or knit) on the top of the editor screen and click "knit to html".
+This will output a document with just the .html format.
+
+In general, html notebooks are good for seeing what your document will look like as you write it, but html documents are better as the final product.
+Only the .html and not .nb.html will display on the github page properly, so only upload that version.
+
+### Document options
+
+Underneath the output type there are a number of other option that change how the output will be rendered. 
+Here are what some of them mean:
+
+- toc: means table of contents, which makes a table out of all of your headers. 
+If you add toc_float = yes it causes the table of contents to move with you as you scroll the document.
+- theme: the appearance of the text and background of the document. 
+The Journal theme looks very clean, but other themes are listed in the R markdown book.
+- highlight: how code in code chunks should be highlighted.
+The options are shown [here](https://www.garrickadenbuie.com/blog/pandoc-syntax-highlighting-examples/).
+It makes code more readable to pick one with noticeable differences between types of code. 
+
+# Code Chunks
+
+The big difference between an R markdown and regular markdown button is that you can insert code chunks and run them in the document.
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+In the dropdown menu you can add code chunks of other languages, like bash.
+By default R studio will not be able to run these code chunks, but you can modify it to do so. 
+However if you're writing a document with mixed types of code it's good to include the chunks, but turn off evaluation.
+
+Here is an example of a code chunk:
+```{r name of chunk}
+#Having eval=FALSE in the header(put a comma after the chunk name first) means the code won't run when the document is knit. This is useful for writing dummy code for thse guides.
+#You can change how the code is output otherwise using the options cog on the top right of the chunk.
+plot(iris$Sepal.Length,iris$Sepal.Width) #You can write code in chunks and they will be outputed in the document in-line
+```
+
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+The preview shows you a rendered HTML copy of the contents of the editor. 
+Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
+
+# Changelog
+
+Every document should include a changelog at the bottom.
+For each time the document is changed, put a short description of what was changed, the date, and who changed it. 
+This can be seen on github (using the blame feature), but the changelog is good for people not as familiar with github to see when it was last modified. 
+
+3/25/2024- Created (CE)
