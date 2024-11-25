@@ -50,6 +50,8 @@ They also have a number of other resources to get you started using the command 
 [Hands on programming]: https://rstudio-education.github.io/hopr/
 [Data Science book]: https://r4ds.hadley.nz/
 [R markdown book]: https://bookdown.org/yihui/rmarkdown/
+
+test
 [OSC]: osc.edu
 [linux tutorial]: https://www.osc.edu/content/linux-command-line-fundamentals
 [Code club]: https://biodash.github.io/
